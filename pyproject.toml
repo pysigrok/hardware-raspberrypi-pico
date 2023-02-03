@@ -3,7 +3,7 @@ requires = ["flit_core >=3.2,<4"]
 build-backend = "flit_core.buildapi"
 
 [project]
-name = "pysigrok_raspberrypi_pico"
+name = "pysigrok-hardware-raspberrypi-pico"
 authors = [{name = "Scott Shawcroft", email = "scott@tannewt.org"}]
 license = {file = "LICENSE"}
 classifiers = ["License :: OSI Approved :: MIT License"]
@@ -11,6 +11,9 @@ dynamic = ["version", "description"]
 
 [project.urls]
 Home = "https://github.com/pysigrok/hardware-raspberrypi-pico"
+
+[tool.flit.module]
+name = "pysigrok_raspberrypi_pico"
 
 [project.entry-points."pysigrok.hardware"]
 raspberrypi_pico = "pysigrok_raspberrypi_pico:PicoDriver"
