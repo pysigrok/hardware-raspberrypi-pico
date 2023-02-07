@@ -1,6 +1,6 @@
 """PySigrok driver for rp2040 logic capture"""
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 import serial
 
@@ -79,18 +79,32 @@ class PicoDriver:
         _, channelinfo, self.version = info.split(b",")
         self.version = int(self.version)
 
+        if self.version >= 3:
+            # For the future. In 3, it's empty.
+            remaining_info = self.serial.readline()
+            self.serial.write(b"b\n")
+            board_name = self.serial.readline()
+            pin_names = self.serial.readline()
+        else:
+            board_name = "Pico"
+            pin_names = ""
+
+        self.pin_names = pin_names.decode("utf-8").split(",")
+        if len(self.pin_names) != 30:
+            raise RuntimeError("Board doesn't name all 30 pins")
+
         self.num_a_channels = int(channelinfo[1:3])
         self.analog_bytes = int(channelinfo[3:4])
         self.num_d_channels = int(channelinfo[-2:])
         # print(self.num_a_channels, self.analog_bytes, self.num_d_channels)
 
-        self.all_analog_channels = [f"A{n:d}" for n in range(self.num_a_channels)]
-        self.all_logic_channels = [f"D{n+2:d}" for n in range(self.num_d_channels)]
-
         if channellist is None:
-            self.enabled_channels = self.all_logic_channels + self.all_analog_channels
+            self.enabled_channels = [z for z in self.pin_names if z]
         else:
             self.enabled_channels = channellist.split(",")
+            for channel in self.enabled_channels:
+                if channel not in self.pin_names:
+                    raise ValueError(f"Unknown pin: {channel}")
 
         self.last_sample = None
         self.next_sample = None
@@ -126,15 +140,13 @@ class PicoDriver:
         self.serial.write(b"*")
         self.serial.reset_input_buffer()
 
-        digital_enables = ["D"] * self.num_d_channels
-        for channel in self.all_analog_channels:
-            i = self.all_analog_channels.index(channel)
-            enabled = 1 if channel in self.enabled_channels else 0
+        for i in range(4):
+            enabled = 1 if self.pin_names[26 + i] in self.enabled_channels else 0
             self.send_w_ack(f"A{enabled:d}{i:d}\n")
+        digital_enables = ["D"] * 26
         first_enabled = None
-        for channel in self.all_logic_channels:
-            i = self.all_logic_channels.index(channel)
-            enabled = 1 if channel in self.enabled_channels else 0
+        for i in range(26):
+            enabled = 1 if self.pin_names[i] in self.enabled_channels else 0
             if enabled == 1 and first_enabled is None:
                 first_enabled = i
             self.send_w_ack(f"D{enabled:d}{i:d}\n")
@@ -146,7 +158,7 @@ class PicoDriver:
             raise RuntimeError("Digital pins must be continuous")
 
         self.logic_channel_count = len(digital_enables)
-        self.logic_channels = self.all_logic_channels[first_enabled:first_enabled+len(digital_enables)]
+        self.logic_channels = self.pin_names[first_enabled:first_enabled+len(digital_enables)]
 
         self.send_w_ack(f"L{sample_count:d}\n")
 
