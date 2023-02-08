@@ -1,6 +1,6 @@
 """PySigrok driver for rp2040 logic capture"""
 
-__version__ = "0.0.2"
+__version__ = "0.1.0"
 
 import serial
 
@@ -89,7 +89,7 @@ class PicoDriver:
             board_name = "Pico"
             pin_names = ""
 
-        self.pin_names = pin_names.decode("utf-8").split(",")
+        self.pin_names = pin_names.decode("utf-8").strip().split(",")
         if len(self.pin_names) != 30:
             raise RuntimeError("Board doesn't name all 30 pins")
 
@@ -113,6 +113,7 @@ class PicoDriver:
         self.data_index = 0
         self.chunk_index = 0
         self.overall_index = 0
+        self.analog_values = []
 
     def __del__(self):
         self.serial.close()
@@ -140,9 +141,15 @@ class PicoDriver:
         self.serial.write(b"*")
         self.serial.reset_input_buffer()
 
+        self.analog_channel_count = 0
+        self.analog_channels = []
         for i in range(4):
-            enabled = 1 if self.pin_names[26 + i] in self.enabled_channels else 0
+            pin_name = self.pin_names[26 + i]
+            enabled = 1 if pin_name in self.enabled_channels else 0
             self.send_w_ack(f"A{enabled:d}{i:d}\n")
+            self.analog_channel_count += enabled
+            if enabled:
+                self.analog_channels.append(pin_name)
         digital_enables = ["D"] * 26
         first_enabled = None
         for i in range(26):
@@ -152,6 +159,7 @@ class PicoDriver:
             self.send_w_ack(f"D{enabled:d}{i:d}\n")
             if enabled:
                 digital_enables[i] = "E"
+        # TODO: Remove this check. We're ok skipping channels, it'll just slow things down.
         digital_enables = "".join(digital_enables)
         digital_enables = digital_enables.strip("D")
         if "D" in digital_enables:
@@ -199,7 +207,7 @@ class PicoDriver:
 
     def _next_byte(self):
         if self.data_index >= len(self.data):
-            self.samplenum += self.rle_remaining + 1
+            self.samplenum += self.rle_remaining
             raise EOFError()
         chunk = self.data[self.data_index]
         b = chunk[self.chunk_index]
@@ -248,7 +256,19 @@ class PicoDriver:
                 self.next_sample = None
             else:
                 b = self._next_byte()
-                if self.logic_channel_count <= 4:
+                # No RLE when analog is active.
+                if self.analog_channel_count > 0:
+                    sample = b & 0x7f
+                    for _ in range(1, self.logic_channel_count // 7 + 1):
+                        b = self._next_byte()
+                        sample |= (b & 0x7f) << 7
+                    # throw away analog in this function
+                    values = []
+                    for _ in range(self.analog_channel_count):
+                        b = self._next_byte()
+                        values.append((b & 0x7f) / 0x7f * 3.3)
+                    self.analog_values.append(values)
+                elif self.logic_channel_count <= 4:
                     # RLE byte
                     if b & 0x80 != 0:
                         sample = b & 0x0f
@@ -285,6 +305,7 @@ class PicoDriver:
 
             if self.last_sample is None:
                 self.last_sample = sample
+                break
             self.samplenum += 1
             self.matched = [True] * len(conds)
             for i, cond in enumerate(conds):
@@ -297,3 +318,6 @@ class PicoDriver:
             bits.append((sample >> b) & 0x1)
 
         return tuple(bits)
+
+    def get_analog_values(self, samplenum):
+        return self.analog_values[samplenum]
