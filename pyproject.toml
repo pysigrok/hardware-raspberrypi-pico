@@ -8,6 +8,10 @@ authors = [{name = "Scott Shawcroft", email = "scott@tannewt.org"}]
 license = {file = "LICENSE"}
 classifiers = ["License :: OSI Approved :: MIT License"]
 dynamic = ["version", "description"]
+dependencies = [
+    "pysigrok",
+    "pyserial < 4"
+]
 
 [project.urls]
 Home = "https://github.com/pysigrok/hardware-raspberrypi-pico"

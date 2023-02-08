@@ -1,6 +1,6 @@
 """PySigrok driver for rp2040 logic capture"""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import serial
 
@@ -136,7 +136,7 @@ class PicoDriver:
         if response != b"*":
             raise RuntimeError()
 
-    def acquire(self, sample_count):
+    def acquire(self, sample_count, triggers={}, pretrigger_data=True):
         self.serial.reset_input_buffer()
         self.serial.write(b"*")
         self.serial.reset_input_buffer()
@@ -152,10 +152,14 @@ class PicoDriver:
                 self.analog_channels.append(pin_name)
         digital_enables = ["D"] * 26
         first_enabled = None
+        bit_triggers = {}
         for i in range(26):
-            enabled = 1 if self.pin_names[i] in self.enabled_channels else 0
+            pin_name = self.pin_names[i]
+            enabled = 1 if pin_name in self.enabled_channels else 0
             if enabled == 1 and first_enabled is None:
                 first_enabled = i
+            if first_enabled is not None and pin_name in triggers:
+                bit_triggers[i - first_enabled] = triggers[pin_name]
             self.send_w_ack(f"D{enabled:d}{i:d}\n")
             if enabled:
                 digital_enables[i] = "E"
@@ -179,12 +183,17 @@ class PicoDriver:
         else:
             raise RuntimeError()
 
-        self.serial.write(b"F\n")
-
+        if not triggers:
+            self.serial.write(b"F\n")
+        else:
+            self.serial.write(b"C\n")
         samples_read = 0
-        last_value = 0
+        trigger_samplenum = None
+        trigger_data_index = 0
+        last_sample = 0
         byte_count = 0
         trailer = None
+        stopping = False
         while trailer is None:
             while self.serial.in_waiting == 0:
                 pass
@@ -197,6 +206,67 @@ class PicoDriver:
                 break
             if trailer is None:
                 self.data.append(data)
+            if bit_triggers and not stopping:
+                i = 0
+                while i < len(data):
+                    # No RLE when analog is active.
+                    if self.analog_channel_count > 0:
+                        sample = data[i] & 0x7f
+                        i += 1
+                        for _ in range(1, self.logic_channel_count // 7 + 1):
+                            b = data[i]
+                            i += 1
+                            sample |= (b & 0x7f) << 7
+                        # throw away analog in this function
+                        i += self.analog_channel_count
+                    elif self.logic_channel_count <= 4:
+                        # RLE byte
+                        b = data[i]
+                        i += 1
+                        if b & 0x80 != 0:
+                            sample = b & 0x0f
+                            samples_read += (b >> 4) & 0x7
+                        elif 0x30 <= b < 0x80:
+                            previous_length = (b - 0x30 + 1) * 8
+                            samples_read += previous_length
+                            continue
+                    else:
+                        b = data[i]
+                        i += 1
+                        # Start of a new sample
+                        if b & 0x80 != 0:
+                            sample = b & 0x7f
+                            for i in range(self.logic_channel_count // 7):
+                                b = data[i]
+                                i += 1
+                                if b & 0x80 == 0:
+                                    raise RuntimeError(f"Expected more sample {b:02x}")
+                                sample |= (b & 0x7f) << (7 * (i + 1))
+                        else:
+                            # RLE byte
+                            if 48 <= b <= 79:
+                                samples_read += b - 47
+                            elif 80 <= b <= 127:
+                                samples_read += (b - 78) * 32
+                            else:
+                                raise RuntimeError(f"Unexpected byte value {b:02x}")
+                            continue
+
+
+                    if last_sample is None:
+                        last_sample = sample
+                        continue
+                    if trigger_samplenum is not None:
+                        if not stopping and samples_read - trigger_samplenum > sample_count:
+                            # End with a reset
+                            self.serial.write(b"*")
+                            stopping = True
+                        continue
+                    samples_read += 1
+                    if cond_matches(bit_triggers, last_sample, sample):
+                        trigger_samplenum = samples_read
+                        trigger_data_index = len(self.data) - 1
+                    last_sample = sample
         if not trailer.startswith(b"$"):
             raise RuntimeError()
         while b"+" not in trailer:
@@ -204,6 +274,15 @@ class PicoDriver:
         total_bytes = int(trailer[1:trailer.index(b"+")])
         if sum((len(x) for x in self.data)) != total_bytes:
             raise RuntimeError()
+
+        if not pretrigger_data and trigger_data_index > 0:
+            start_i = trigger_data_index
+            # Make sure the data chunk starts with a sample. Generally, it always should.
+            while start_i > 0:
+                if (self.data[start_i][0] & 0x80) != 0:
+                    break
+                start_i -= 1
+            self.data = self.data[start_i:]
 
     def _next_byte(self):
         if self.data_index >= len(self.data):
