@@ -1,6 +1,6 @@
 """PySigrok driver for rp2040 logic capture"""
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 import serial
 
@@ -195,17 +195,16 @@ class PicoDriver:
         trailer = None
         stopping = False
         while trailer is None:
-            while self.serial.in_waiting == 0:
-                pass
             data = self.serial.read(self.serial.in_waiting)
-            if b"!" in data:
-                self.serial.write(b"+")
+            if not data:
                 continue
-            if b"$" in data:
+            if data.startswith(b"!"):
+                self.serial.write(b"+")
+                
+            if data.startswith(b"$"):
                 trailer = data
                 break
-            if trailer is None:
-                self.data.append(data)
+            self.data.append(data)
             if bit_triggers and not stopping:
                 i = 0
                 while i < len(data):
@@ -258,8 +257,8 @@ class PicoDriver:
                         continue
                     if trigger_samplenum is not None:
                         if not stopping and samples_read - trigger_samplenum > sample_count:
-                            # End with a reset
-                            self.serial.write(b"*")
+                            # End with a +
+                            self.serial.write(b"+")
                             stopping = True
                         continue
                     samples_read += 1
@@ -271,6 +270,16 @@ class PicoDriver:
             raise RuntimeError("Unexpected trailer: " + trailer)
         while b"+" not in trailer:
             trailer += self.serial.read(self.serial.in_waiting)
+
+        # strip any trailing ! and empty bytes it leaves
+        while True:
+            if b"!" in self.data[-1]:
+                self.data[-1] = self.data[-1].strip(b"!")
+                # There is data left in this chunk so we got it all.
+                if self.data[-1]:
+                    break
+                else:
+                    self.data.pop()
         total_bytes = int(trailer[1:trailer.index(b"+")])
         bytes_read = sum((len(x) for x in self.data))
         if bytes_read != total_bytes:
@@ -312,7 +321,7 @@ class PicoDriver:
                     if cond_matches(cond, self.last_sample, self.last_sample):
                         self.matched[i] = True
                         sample = self.last_sample
-                
+
                 if any(self.matched):
                     self.rle_remaining -= 1
                 else:
