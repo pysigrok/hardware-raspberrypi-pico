@@ -1,6 +1,6 @@
 """PySigrok driver for rp2040 logic capture"""
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 import serial
 
@@ -268,12 +268,13 @@ class PicoDriver:
                         trigger_data_index = len(self.data) - 1
                     last_sample = sample
         if not trailer.startswith(b"$"):
-            raise RuntimeError()
+            raise RuntimeError("Unexpected trailer: " + trailer)
         while b"+" not in trailer:
             trailer += self.serial.read(self.serial.in_waiting)
         total_bytes = int(trailer[1:trailer.index(b"+")])
-        if sum((len(x) for x in self.data)) != total_bytes:
-            raise RuntimeError()
+        bytes_read = sum((len(x) for x in self.data))
+        if bytes_read != total_bytes:
+            raise RuntimeError("Missed some bytes. Read {bytes_read} but device sent {total_bytes}.")
 
         if not pretrigger_data and trigger_data_index > 0:
             start_i = trigger_data_index
@@ -316,13 +317,18 @@ class PicoDriver:
                     self.rle_remaining -= 1
                 else:
                     for i, cond in enumerate(conds):
-                        if "skip" in cond and cond["skip"] <= self.rle_remaining:
-                            self.matched[i] = True
-                            self.rle_remaining -= cond["skip"]
-                            self.samplenum += cond["skip"]
-                            sample = self.last_sample
-                            # Only one skip is possible
-                            break
+                        if "skip" in cond:
+                            if cond["skip"] <= self.rle_remaining:
+                                if cond["skip"] < 0:
+                                    raise RuntimeError()
+                                self.matched[i] = True
+                                self.rle_remaining -= cond["skip"]
+                                self.samplenum += cond["skip"]
+                                sample = self.last_sample
+                                # Only one skip is possible
+                                break
+                            else:
+                                cond["skip"] -= self.rle_remaining
 
             if any(self.matched):
                 break
@@ -384,10 +390,13 @@ class PicoDriver:
 
             if self.last_sample is None:
                 self.last_sample = sample
-                break
             self.samplenum += 1
-            self.matched = [True] * len(conds)
+            self.matched = [False] * len(conds)
             for i, cond in enumerate(conds):
+                if "skip" in cond:
+                    cond["skip"] -= 1
+                    self.matched[i] = cond["skip"] == 0
+                    continue
                 if cond_matches(cond, self.last_sample, sample):
                     self.matched[i] = True
             self.last_sample = sample
@@ -395,6 +404,8 @@ class PicoDriver:
         bits = []
         for b in range(len(self.logic_channels)):
             bits.append((sample >> b) & 0x1)
+
+        # print("found", self.samplenum, bits, conds, self.matched)
 
         return tuple(bits)
 
