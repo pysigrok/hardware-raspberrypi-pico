@@ -1,6 +1,6 @@
 """PySigrok driver for rp2040 logic capture"""
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 
 import serial
 
@@ -198,13 +198,14 @@ class PicoDriver:
             data = self.serial.read(self.serial.in_waiting)
             if not data:
                 continue
-            if data.startswith(b"!"):
-                self.serial.write(b"+")
-                
             if data.startswith(b"$"):
                 trailer = data
                 break
-            self.data.append(data)
+            if data.endswith(b"!"):
+                self.serial.write(b"+")
+                self.data.append(data.strip(b"!"))
+            else:
+                self.data.append(data)
             if bit_triggers and not stopping:
                 i = 0
                 while i < len(data):
@@ -271,15 +272,6 @@ class PicoDriver:
         while b"+" not in trailer:
             trailer += self.serial.read(self.serial.in_waiting)
 
-        # strip any trailing ! and empty bytes it leaves
-        while True:
-            if b"!" in self.data[-1]:
-                self.data[-1] = self.data[-1].strip(b"!")
-                # There is data left in this chunk so we got it all.
-                if self.data[-1]:
-                    break
-                else:
-                    self.data.pop()
         total_bytes = int(trailer[1:trailer.index(b"+")])
         bytes_read = sum((len(x) for x in self.data))
         if bytes_read != total_bytes:
