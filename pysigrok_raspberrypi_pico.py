@@ -1,6 +1,6 @@
 """PySigrok driver for rp2040 logic capture"""
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 import serial
 
@@ -75,7 +75,7 @@ class PicoDriver:
         self.serial.write(b"i\n")
         info = self.serial.read(17)
         if not info.startswith(b"SRPICO,A"):
-            raise RuntimeError()
+            raise RuntimeError("Didn't receive device info: " + repr(info))
         _, channelinfo, self.version = info.split(b",")
         self.version = int(self.version)
 
@@ -125,7 +125,7 @@ class PicoDriver:
     @samplerate.setter
     def samplerate(self, value):
         if value not in self.samplerates:
-            raise ValueError()
+            raise ValueError("Invalid sample rate")
         self._samplerate = value
 
     def send_w_ack(self, data):
@@ -134,7 +134,7 @@ class PicoDriver:
         self.serial.write(data)
         response = self.serial.read(1)
         if response != b"*":
-            raise RuntimeError()
+            raise RuntimeError("Unexpected ack character" + repr(response))
 
     def acquire(self, sample_count, triggers={}, pretrigger_data=True):
         self.serial.reset_input_buffer()
@@ -274,7 +274,7 @@ class PicoDriver:
         total_bytes = int(trailer[1:trailer.index(b"+")])
         bytes_read = sum((len(x) for x in self.data))
         if bytes_read != total_bytes:
-            raise RuntimeError("Missed some bytes. Read {bytes_read} but device sent {total_bytes}.")
+            raise RuntimeError(f"Missed some bytes. Read {bytes_read} but device sent {total_bytes}.")
 
         if not pretrigger_data and trigger_data_index > 0:
             start_i = trigger_data_index
