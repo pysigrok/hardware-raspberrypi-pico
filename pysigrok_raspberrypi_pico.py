@@ -1,12 +1,13 @@
 """PySigrok driver for rp2040 logic capture"""
 
-__version__ = "0.2.4"
+__version__ = "0.3.0"
 
 import serial
 
-from sigrokdecode import SR_KHZ, SR_MHZ, cond_matches
+from sigrokdecode import SR_KHZ, SR_MHZ, OUTPUT_PYTHON, cond_matches
+from sigrokdecode.input import Input
 
-class PicoDriver:
+class PicoDriver(Input):
     name = "raspberrypi-pico"
     longname = "RaspberryPI PICO"
 
@@ -64,7 +65,8 @@ class PicoDriver:
     ]
 
     def __init__(self, channellist=None, conn="", samplerate="5000"):
-        self.serial = serial.Serial(conn)
+        super().__init__()
+        self.serial = serial.Serial(conn, timeout=1)
         self._samplerate = int(samplerate)
         self.data = []
 
@@ -108,12 +110,12 @@ class PicoDriver:
 
         self.last_sample = None
         self.next_sample = None
+        self.start_samplenum = None
         self.samplenum = 0
         self.rle_remaining = 0
         self.data_index = 0
         self.chunk_index = 0
         self.overall_index = 0
-        self.analog_values = []
 
     def __del__(self):
         self.serial.close()
@@ -150,27 +152,28 @@ class PicoDriver:
             self.analog_channel_count += enabled
             if enabled:
                 self.analog_channels.append(pin_name)
-        digital_enables = ["D"] * 26
         first_enabled = None
+        # bit trigger indices include
         bit_triggers = {}
+        self.bit_mapping = []
+        self.one_to_one = True
+        self.logic_channels = []
         for i in range(26):
             pin_name = self.pin_names[i]
             enabled = 1 if pin_name in self.enabled_channels else 0
-            if enabled == 1 and first_enabled is None:
-                first_enabled = i
+            if enabled == 1:
+                self.logic_channels.append(pin_name)
+                if first_enabled is None:
+                    first_enabled = i
+                in_bit = i - first_enabled
+                out_bit = len(self.bit_mapping)
+                self.one_to_one = self.one_to_one and in_bit == out_bit
+                self.bit_mapping.append((in_bit, out_bit))
             if first_enabled is not None and pin_name in triggers:
                 bit_triggers[i - first_enabled] = triggers[pin_name]
             self.send_w_ack(f"D{enabled:d}{i:d}\n")
-            if enabled:
-                digital_enables[i] = "E"
-        # TODO: Remove this check. We're ok skipping channels, it'll just slow things down.
-        digital_enables = "".join(digital_enables)
-        digital_enables = digital_enables.strip("D")
-        if "D" in digital_enables:
-            raise RuntimeError("Digital pins must be continuous")
 
-        self.logic_channel_count = len(digital_enables)
-        self.logic_channels = self.pin_names[first_enabled:first_enabled+len(digital_enables)]
+        self.logic_channel_count = len(self.logic_channels)
 
         self.send_w_ack(f"L{sample_count:d}\n")
 
@@ -202,6 +205,7 @@ class PicoDriver:
                 trailer = data
                 break
             if data.endswith(b"!"):
+                print("abort")
                 self.serial.write(b"+")
                 self.data.append(data.strip(b"!"))
             else:
@@ -289,6 +293,7 @@ class PicoDriver:
     def _next_byte(self):
         if self.data_index >= len(self.data):
             self.samplenum += self.rle_remaining
+            self.put(self.start_samplenum, self.samplenum, OUTPUT_PYTHON, ["logic", self.last_sample])
             raise EOFError()
         chunk = self.data[self.data_index]
         b = chunk[self.chunk_index]
@@ -349,11 +354,11 @@ class PicoDriver:
                         b = self._next_byte()
                         sample |= (b & 0x7f) << 7
                     # throw away analog in this function
-                    values = []
+                    values = ["analog"]
                     for _ in range(self.analog_channel_count):
                         b = self._next_byte()
                         values.append((b & 0x7f) / 0x7f * 3.3)
-                    self.analog_values.append(values)
+                    self.put(self.samplenum, self.samplenum + 1, OUTPUT_PYTHON, values)
                 elif self.logic_channel_count <= 4:
                     # RLE byte
                     if b & 0x80 != 0:
@@ -388,9 +393,19 @@ class PicoDriver:
                             raise RuntimeError(f"Unexpected byte value {b:02x}")
                         continue
 
+            if not self.one_to_one:
+                mapped_sample = 0
+                for in_bit, out_bit in self.bit_mapping:
+                    if sample & (1 << in_bit) != 0:
+                        mapped_sample |= (1 << out_bit)
+                sample = mapped_sample
 
             if self.last_sample is None:
                 self.last_sample = sample
+            else:
+                self.put(self.start_samplenum, self.samplenum, OUTPUT_PYTHON, ["logic", self.last_sample])
+
+            self.start_samplenum = self.samplenum
             self.samplenum += 1
             self.matched = [False] * len(conds)
             for i, cond in enumerate(conds):
@@ -409,6 +424,3 @@ class PicoDriver:
         # print("found", self.samplenum, bits, conds, self.matched)
 
         return tuple(bits)
-
-    def get_analog_values(self, samplenum):
-        return self.analog_values[samplenum]

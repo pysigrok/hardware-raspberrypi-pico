@@ -9,7 +9,7 @@ license = {file = "LICENSE"}
 classifiers = ["License :: OSI Approved :: MIT License"]
 dynamic = ["version", "description"]
 dependencies = [
-    "pysigrok",
+    "pysigrok >= 0.4.0",
     "pyserial < 4"
 ]
 
