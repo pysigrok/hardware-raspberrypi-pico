@@ -30,7 +30,7 @@ Supported protocol decoders:
 ...
 ```
 
-You'll need to install the sigrok-pico code onto your RP2040. The [source is on Github](https://github.com/pysirok/sigrok-pico) and the [uf2 to install is as well](https://github.com/tannewt/sigrok-pico/blob/main/pico_sdk_sigrok/build/).
+You'll need to install the sigrok-pico code onto your RP2040. The [source is on Github](https://github.com/pysigrok/sigrok-pico) and the [uf2 to install is as well](https://github.com/tannewt/sigrok-pico/blob/main/pico_sdk_sigrok/build/).
 
 To find the CDC device for the RP2040:
 
