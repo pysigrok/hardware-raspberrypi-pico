@@ -1,6 +1,6 @@
 """PySigrok driver for rp2040 logic capture"""
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 import serial
 
@@ -223,6 +223,7 @@ class PicoDriver(Input):
                             sample |= (b & 0x7f) << 7
                         # throw away analog in this function
                         i += self.analog_channel_count
+                        samples_read += 1
                     elif self.logic_channel_count <= 4:
                         # RLE byte
                         b = data[i]
@@ -262,8 +263,8 @@ class PicoDriver(Input):
                         continue
                     if trigger_samplenum is not None:
                         if not stopping and samples_read - trigger_samplenum > sample_count:
-                            # End with a +
-                            self.serial.write(b"+")
+                            # End with a *
+                            self.serial.write(b"*")
                             stopping = True
                         continue
                     samples_read += 1
@@ -305,7 +306,7 @@ class PicoDriver(Input):
         return b
 
 
-    def wait(self, conds=None):
+    def wait(self, conds=[]):
         self.matched = [False]
 
         next_sample = None
@@ -313,7 +314,11 @@ class PicoDriver(Input):
         while not any(self.matched):
             # Check for a skip shorter than our RLE or a condition that still matches
             if self.rle_remaining > 0:
-                self.matched = [False] * len(conds)
+                if len(conds) == 0:
+                    self.matched = [True]
+                    sample = self.last_sample
+                else:
+                    self.matched = [False] * len(conds)
                 for i, cond in enumerate(conds):
                     if cond_matches(cond, self.last_sample, self.last_sample):
                         self.matched[i] = True
@@ -321,6 +326,7 @@ class PicoDriver(Input):
 
                 if any(self.matched):
                     self.rle_remaining -= 1
+                    self.samplenum += 1
                 else:
                     for i, cond in enumerate(conds):
                         if "skip" in cond:
@@ -407,7 +413,10 @@ class PicoDriver(Input):
 
             self.start_samplenum = self.samplenum
             self.samplenum += 1
-            self.matched = [False] * len(conds)
+            if len(conds) == 0:
+                self.matched = [True]
+            else:
+                self.matched = [False] * len(conds)
             for i, cond in enumerate(conds):
                 if "skip" in cond:
                     cond["skip"] -= 1
